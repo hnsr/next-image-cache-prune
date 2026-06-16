@@ -34,13 +34,17 @@ async function main() {
   const releaseLock = await acquireLock(lockDir)
 
   try {
-    const entries = await getCacheEntries(cacheDir, minAgeMs)
+    const entries = await getCacheEntries(cacheDir)
+    const now = Date.now()
     const totalBytes = entries.reduce((sum, entry) => sum + entry.bytes, 0)
+    const eligibleEntries = entries.filter((entry) => now - entry.mtimeMs >= minAgeMs)
 
     log(`Cache: ${cacheDir}`)
     log(`Current size: ${formatBytes(totalBytes)}`)
     log(`Max size: ${formatBytes(maxBytes)}`)
     log(`Target size: ${formatBytes(targetBytes)}`)
+    log(`Total entries: ${entries.length}`)
+    log(`Eligible entries: ${eligibleEntries.length}`)
 
     if (totalBytes <= maxBytes) {
       log('Nothing to prune.')
@@ -49,12 +53,10 @@ async function main() {
       let removedBytes = 0
       let removedCount = 0
 
-      entries.sort((a, b) => a.mtimeMs - b.mtimeMs)
+      eligibleEntries.sort((a, b) => a.mtimeMs - b.mtimeMs)
 
-      for (const entry of entries) {
+      for (const entry of eligibleEntries) {
         if (currentBytes <= targetBytes) break
-
-        log(`${dryRun ? 'Would remove' : 'Removing'} ${entry.path} (${formatBytes(entry.bytes)})`)
 
         if (!dryRun) {
           await fs.rm(entry.path, { recursive: true, force: true })
@@ -65,16 +67,19 @@ async function main() {
         removedCount += 1
       }
 
-      log(`${dryRun ? 'Would remove' : 'Removed'} ${removedCount} entries, ${formatBytes(removedBytes)}.`)
+      log(`${dryRun ? 'Would remove' : 'Removed'} ${formatCount(removedCount, 'entry', 'entries')}, ${formatBytes(removedBytes)}.`)
       log(`Estimated final size: ${formatBytes(currentBytes)}`)
+
+      if (currentBytes > targetBytes) {
+        log(`Target not reached because there were no more eligible entries older than ${formatDuration(minAgeMs)}.`)
+      }
     }
   } finally {
     await releaseLock()
   }
 }
 
-async function getCacheEntries(dir, minAgeMs) {
-  const now = Date.now()
+async function getCacheEntries(dir) {
   const names = await fs.readdir(dir)
   const entries = []
 
@@ -86,7 +91,6 @@ async function getCacheEntries(dir, minAgeMs) {
 
     if (!stat.isDirectory()) continue
     if (stat.isSymbolicLink()) continue
-    if (now - stat.mtimeMs < minAgeMs) continue
 
     entries.push({
       path: fullPath,
@@ -248,6 +252,10 @@ function formatDuration(ms) {
   const minutes = Math.floor(seconds / 60)
   const remainingSeconds = Math.round(seconds % 60)
   return `${minutes}m ${remainingSeconds}s`
+}
+
+function formatCount(count, singular, plural) {
+  return `${count} ${count === 1 ? singular : plural}`
 }
 
 function log(message) {
