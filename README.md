@@ -84,10 +84,10 @@ ms, s, m, h, d
 
 ## Cron Example
 
-Run every 5 minutes:
+Run every 30 minutes:
 
 ```cron
-*/5 * * * * node /usr/local/bin/prune-cache.mjs --cache-dir /home/app/current/shared/.next/cache/images --max 50gb --target 45gb --min-age 15m >> /var/log/next-image-cache-prune.log 2>&1
+*/30 * * * * node /path/to/prune-cache.mjs --cache-dir /path/to/.next/cache/images --max 50gb --target 45gb --min-age 15m >> /var/log/next-image-cache-prune.log 2>&1
 ```
 
 ## Safety Features
