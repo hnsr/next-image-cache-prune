@@ -2,61 +2,75 @@
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 
-const args = parseArgs(process.argv.slice(2))
+const startedAt = Date.now()
 
-const cacheDir = path.resolve(required(args, 'cache-dir'))
-const maxBytes = parseBytes(required(args, 'max'))
-const targetBytes = parseBytes(args.target ?? args.max)
-const minAgeMs = parseDuration(args['min-age'] ?? '15m')
-const dryRun = Boolean(args['dry-run'])
-const force = Boolean(args.force)
-
-if (targetBytes > maxBytes) {
-  throw new Error('--target must be <= --max')
+log('Started.')
+try {
+  await main()
+  log(`Finished in ${formatDuration(Date.now() - startedAt)}.`)
+} catch (error) {
+  log(`Failed after ${formatDuration(Date.now() - startedAt)}.`)
+  console.error(error.stack ?? error)
+  process.exitCode = 1
 }
 
-await assertSafeCacheDir(cacheDir, force)
+async function main() {
+  const args = parseArgs(process.argv.slice(2))
 
-const lockDir = path.join(cacheDir, '.prune-lock')
-const releaseLock = await acquireLock(lockDir)
+  const cacheDir = path.resolve(required(args, 'cache-dir'))
+  const maxBytes = parseBytes(required(args, 'max'))
+  const targetBytes = parseBytes(args.target ?? args.max)
+  const minAgeMs = parseDuration(args['min-age'] ?? '15m')
+  const dryRun = Boolean(args['dry-run'])
+  const force = Boolean(args.force)
 
-try {
-  const entries = await getCacheEntries(cacheDir, minAgeMs)
-  const totalBytes = entries.reduce((sum, entry) => sum + entry.bytes, 0)
+  if (targetBytes > maxBytes) {
+    throw new Error('--target must be <= --max')
+  }
 
-  log(`Cache: ${cacheDir}`)
-  log(`Current size: ${formatBytes(totalBytes)}`)
-  log(`Max size: ${formatBytes(maxBytes)}`)
-  log(`Target size: ${formatBytes(targetBytes)}`)
+  await assertSafeCacheDir(cacheDir, force)
 
-  if (totalBytes <= maxBytes) {
-    log('Nothing to prune.')
-  } else {
-    let currentBytes = totalBytes
-    let removedBytes = 0
-    let removedCount = 0
+  const lockDir = path.join(cacheDir, '.prune-lock')
+  const releaseLock = await acquireLock(lockDir)
 
-    entries.sort((a, b) => a.mtimeMs - b.mtimeMs)
+  try {
+    const entries = await getCacheEntries(cacheDir, minAgeMs)
+    const totalBytes = entries.reduce((sum, entry) => sum + entry.bytes, 0)
 
-    for (const entry of entries) {
-      if (currentBytes <= targetBytes) break
+    log(`Cache: ${cacheDir}`)
+    log(`Current size: ${formatBytes(totalBytes)}`)
+    log(`Max size: ${formatBytes(maxBytes)}`)
+    log(`Target size: ${formatBytes(targetBytes)}`)
 
-      log(`${dryRun ? 'Would remove' : 'Removing'} ${entry.path} (${formatBytes(entry.bytes)})`)
+    if (totalBytes <= maxBytes) {
+      log('Nothing to prune.')
+    } else {
+      let currentBytes = totalBytes
+      let removedBytes = 0
+      let removedCount = 0
 
-      if (!dryRun) {
-        await fs.rm(entry.path, { recursive: true, force: true })
+      entries.sort((a, b) => a.mtimeMs - b.mtimeMs)
+
+      for (const entry of entries) {
+        if (currentBytes <= targetBytes) break
+
+        log(`${dryRun ? 'Would remove' : 'Removing'} ${entry.path} (${formatBytes(entry.bytes)})`)
+
+        if (!dryRun) {
+          await fs.rm(entry.path, { recursive: true, force: true })
+        }
+
+        currentBytes -= entry.bytes
+        removedBytes += entry.bytes
+        removedCount += 1
       }
 
-      currentBytes -= entry.bytes
-      removedBytes += entry.bytes
-      removedCount += 1
+      log(`${dryRun ? 'Would remove' : 'Removed'} ${removedCount} entries, ${formatBytes(removedBytes)}.`)
+      log(`Estimated final size: ${formatBytes(currentBytes)}`)
     }
-
-    log(`${dryRun ? 'Would remove' : 'Removed'} ${removedCount} entries, ${formatBytes(removedBytes)}.`)
-    log(`Estimated final size: ${formatBytes(currentBytes)}`)
+  } finally {
+    await releaseLock()
   }
-} finally {
-  await releaseLock()
 }
 
 async function getCacheEntries(dir, minAgeMs) {
@@ -225,6 +239,17 @@ function formatBytes(bytes) {
   return `${value.toFixed(value >= 10 || unit === 0 ? 0 : 1)} ${units[unit]}`
 }
 
+function formatDuration(ms) {
+  if (ms < 1000) return `${ms}ms`
+
+  const seconds = ms / 1000
+  if (seconds < 60) return `${seconds.toFixed(seconds >= 10 ? 0 : 1)}s`
+
+  const minutes = Math.floor(seconds / 60)
+  const remainingSeconds = Math.round(seconds % 60)
+  return `${minutes}m ${remainingSeconds}s`
+}
+
 function log(message) {
-  console.log(`[next-image-cache-prune] ${message}`)
+  console.log(`${new Date().toISOString()} [next-image-cache-prune] ${message}`)
 }
